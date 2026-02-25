@@ -13,6 +13,7 @@ venv/
 
 # HyBot local data
 .hybot/sessions.db
+skills/
 
 # IDE
 .vscode/
