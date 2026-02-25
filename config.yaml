@@ -1,0 +1,42 @@
+model:
+  id: "gpt-4o"                      # OpenAI 模型 ID
+  base_url: null                     # 可选，自定义 API 端点（如兼容 OpenAI 的第三方服务）
+  api_key: null                      # 可选，优先使用环境变量 OPENAI_API_KEY
+
+agent:
+  name: "HyBot"
+  description: "AI 编码助手，可执行文件操作、Shell 命令、运行 Python 代码"
+  instructions:
+    - "你是一个强大的 AI 编码助手。"
+    - "使用中文回复用户。"
+    - "在修改文件前先阅读文件内容。"
+  markdown: true
+  stream: true
+  reasoning: false                    # 是否启用推理能力（运行时可用 /reasoning 切换）
+  show_reasoning: true                # 是否显示思考过程（运行时可用 /thinking 切换）
+  add_history_to_context: true
+  num_history_runs: 10
+  add_datetime_to_context: true
+
+tools:
+  coding:
+    enabled: true
+    base_dir: "."                    # 工作目录
+    all: true                        # 启用所有 CodingTools
+  python:
+    enabled: true                    # 启用 PythonTools
+
+storage:
+  type: "sqlite"
+  db_file: "~/.hybot/sessions.db"     # fallback，实际由 load_merged_config 覆盖为 <workspace>/.hybot/sessions.db
+
+skills:
+  path: "~/.hybot/skills"        # Skills 目录路径
+
+mcp_servers: []                      # MCP 服务器列表
+# 示例：
+# - name: "filesystem"
+#   command: "npx -y @modelcontextprotocol/server-filesystem /tmp"
+# - name: "my-server"
+#   url: "http://localhost:8080"
+#   transport: "streamable-http"

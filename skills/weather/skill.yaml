@@ -1,0 +1,16 @@
+name: weather
+description: "简单的天气查询 skill，通过城市名称查询当前天气状况（基于 wttr.in，无需 API Key）。"
+version: 0.1.0
+
+entrypoint: weather_skill:WeatherSkill
+
+functions:
+  - name: get_weather
+    description: 通过城市名称查询当前天气（使用 wttr.in，单位为摄氏度）
+    parameters:
+      type: object
+      properties:
+        city:
+          type: string
+          description: 城市名，例如 "Beijing" 或 "北京"
+      required: [city]

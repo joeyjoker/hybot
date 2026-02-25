@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hybot"
+version = "0.1.0"
+description = "An interactive AI CLI agent powered by agno framework"
+requires-python = ">=3.10"
+dependencies = [
+    "agno[openai,mcp]>=2.5.3",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+    "sqlalchemy>=2.0",
+    "rich>=13.0",
+    "prompt_toolkit>=3.0",
+]
+
+[project.scripts]
+hybot = "hybot.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
