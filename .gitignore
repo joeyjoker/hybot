@@ -12,7 +12,7 @@ build/
 venv/
 
 # HyBot local data
-.hybot/sessions.db
+.hybot/
 skills/
 
 # IDE
