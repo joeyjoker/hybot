@@ -16,6 +16,9 @@ dependencies = [
     "prompt_toolkit>=3.0",
 ]
 
+[project.optional-dependencies]
+web = ["duckduckgo-search>=6.0"]
+
 [project.scripts]
 hybot = "hybot.__main__:main"
 

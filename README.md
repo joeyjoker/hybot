@@ -2,80 +2,97 @@
 
 An interactive AI coding assistant in your terminal, powered by the [agno](https://github.com/agno-agi/agno) framework.
 
-一个运行在终端的交互式 AI 编码助手，基于 [agno](https://github.com/agno-agi/agno) 框架构建。
+[中文文档 (Chinese)](./README.zh-CN.md)
 
 ---
 
-## Features / 功能特性
+## Features
 
-- **Multi-provider support / 多模型 Provider 支持** — OpenAI Chat Completions, OpenAI Responses API, Anthropic Claude, Google Gemini
-- **Built-in tools / 内置工具** — File read/write, shell commands (CodingTools), Python execution (PythonTools)
-- **MCP integration / MCP 集成** — Connect to any [Model Context Protocol](https://modelcontextprotocol.io/) server via stdio or HTTP
-- **Skills system / 技能系统** — Modular, reusable skill packages loaded from a configurable directory
-- **Session persistence / 会话持久化** — SQLite-backed session history with resume support
-- **Layered config / 分层配置** — Global (`~/.hybot/config.yaml`) + workspace-local (`.hybot/config.yaml`) deep merge
-- **AGENT.md** — Project-specific agent instructions, loaded automatically at startup / 项目级 Agent 指令，启动时自动加载
-- **Workspace trust / 工作区信任** — Explicit approval before running in a new directory / 在新目录运行前需显式授权
+- **Multi-provider support** — OpenAI Chat Completions, OpenAI Responses API, Anthropic Claude, Google Gemini
+- **Built-in tools** — File read/write, shell commands (CodingTools), Python execution (PythonTools)
+- **Dangerous operation confirmation** — Intercepts `rm -rf`, `sudo`, `git push --force`, etc. with three configurable modes
+- **Persistent memory** — Agent saves and recalls memories across sessions (preferences, lessons learned, etc.)
+- **Project awareness** — Auto-detects language, framework, package manager, and directory structure on startup
+- **Git tools** — Agent can run git status, diff, log, add, commit, branch, checkout, stash, and show
+- **Web tools** — Optional DuckDuckGo search and website content fetching
+- **MCP integration** — Connect to any [Model Context Protocol](https://modelcontextprotocol.io/) server via stdio or HTTP
+- **Skills system** — Modular skill packages with full lifecycle management (install / remove / catalog)
+- **Sub-agents** — Define task-specific sub-agents in YAML; the main agent delegates via tool calls
+- **Non-interactive mode** — `hybot --run "task"` for single-shot execution with optional JSON output
+- **Session persistence** — SQLite-backed history with resume support
+- **Layered config** — Global (`~/.hybot/config.yaml`) + workspace-local (`.hybot/config.yaml`) deep merge
+- **AGENT.md** — Project-specific agent instructions loaded automatically at startup
+- **Workspace trust** — Explicit user approval before running in a new directory
 
 ---
 
-## Quick Start / 快速开始
+## Quick Start
 
-### Install / 安装
+### Install
 
 ```bash
-# From source / 从源码安装
+# From source
 git clone <repo-url> && cd hybot
 pip install -e .
 
-# For Anthropic Claude support / 如需使用 Claude
-pip install anthropic
-# or: pip install agno[anthropic]
+# With web search support
+pip install -e ".[web]"
 
-# For Google Gemini support / 如需使用 Gemini
-pip install google-genai
-# or: pip install agno[google]
+# Provider extras
+pip install anthropic        # For Anthropic Claude
+pip install google-genai     # For Google Gemini
 ```
 
-### Run / 运行
+### Run
 
 ```bash
-# Set your API key / 设置 API 密钥
 export OPENAI_API_KEY=sk-xxx
 
-# Launch / 启动
+# Interactive mode
 hybot
 
-# Resume a previous session / 恢复历史会话
+# Resume a previous session
 hybot --session <session-id>
 
-# Use a custom config file / 指定配置文件
-hybot --config /path/to/config.yaml
+# Non-interactive mode
+hybot --run "list all Python files under src/"
+hybot --run "analyze project structure" --output json
+hybot --run "run tests" --project /path/to/project
 ```
 
-On first run in a directory, HyBot will ask for workspace trust approval and initialize a `.hybot/` directory.
-
-首次在某目录运行时，HyBot 会请求工作区信任授权并初始化 `.hybot/` 目录。
+On first run in a directory, HyBot asks for workspace trust approval and initializes a `.hybot/` directory.
 
 ---
 
-## Configuration / 配置
+## CLI Arguments
 
-HyBot uses a two-level config system. The workspace-local config deep-merges on top of the global config — only override what you need.
-
-HyBot 采用两级配置系统。工作区本地配置会深度合并覆盖全局配置，只需填写需要覆盖的字段。
-
-| File / 文件 | Purpose / 用途 |
+| Argument | Description |
 |---|---|
-| `~/.hybot/config.yaml` | Global defaults / 全局默认配置 |
-| `<workspace>/.hybot/config.yaml` | Per-project overrides / 项目级覆盖配置 |
+| `-c`, `--config PATH` | Config file path (default `~/.hybot/config.yaml`) |
+| `-s`, `--session ID` | Resume a specific session |
+| `-r`, `--run TEXT` | Execute a single task and exit |
+| `-p`, `--project DIR` | Working directory (default: cwd) |
+| `--output {text,json}` | Output format (default: `text`) |
+| `--no-stream` | Disable streaming output |
+| `--debug` | Enable debug mode |
 
-### Full Config Reference / 完整配置参考
+---
+
+## Configuration
+
+Two-level config system — workspace-local deep-merges on top of global. Only override what you need.
+
+| File | Purpose |
+|---|---|
+| `~/.hybot/config.yaml` | Global defaults |
+| `<workspace>/.hybot/config.yaml` | Per-project overrides |
+
+### Full Reference
 
 ```yaml
 model:
   provider: "openai"            # "openai" | "openai_responses" | "anthropic" | "gemini"
-  id: "gpt-4o"                  # Model ID
+  id: "gpt-4o"
   base_url: null                # Custom API endpoint (openai / openai_responses only)
   api_key: null                 # Falls back to env vars (OPENAI_API_KEY, etc.)
   reasoning_effort: null        # "minimal" | "low" | "medium" | "high"
@@ -89,6 +106,7 @@ agent:
   markdown: true
   stream: true
   reasoning: false
+  show_reasoning: true
   add_history_to_context: true
   num_history_runs: 10
   add_datetime_to_context: true
@@ -100,6 +118,23 @@ tools:
     all: true
   python:
     enabled: true
+  git:
+    enabled: true               # Git tools (status, diff, log, commit, etc.)
+  web:
+    enabled: false              # Disabled by default to avoid unintended network access
+    enable_search: true         # DuckDuckGo search
+    enable_fetch: true          # Website content fetching
+
+memory:
+  enabled: true
+  path: "~/.hybot/memory"
+
+approval:
+  mode: "dangerous"             # "always" | "dangerous" | "never"
+
+project:
+  scan_on_startup: true
+  cache_scan: true
 
 storage:
   type: "sqlite"
@@ -116,14 +151,14 @@ mcp_servers: []
 #   transport: "streamable-http"
 ```
 
-### Provider Examples / Provider 配置示例
+### Provider Examples
 
 ```yaml
-# OpenAI Chat Completions (default / 默认)
+# OpenAI Chat Completions (default)
 model:
   id: gpt-4o
 
-# OpenAI Responses API with reasoning / 使用 Responses API + 推理模型
+# OpenAI Responses API with reasoning
 model:
   provider: openai_responses
   id: o3
@@ -134,69 +169,204 @@ model:
 model:
   provider: anthropic
   id: claude-sonnet-4-5-20250929
-  api_key: sk-ant-xxx
 
 # Google Gemini
 model:
   provider: gemini
   id: gemini-2.0-flash-001
-  api_key: AIzaSyxxx
 
-# OpenAI-compatible endpoint / 兼容 OpenAI 的第三方端点
+# OpenAI-compatible endpoint
 model:
   id: deepseek-chat
   base_url: https://api.deepseek.com/v1
-  api_key: sk-xxx
+```
+
+### Approval Modes
+
+| Mode | Behavior |
+|---|---|
+| `dangerous` (default) | Prompts confirmation only for dangerous shell commands (`rm -rf`, `sudo`, `chmod`, `dd`, `git push --force`, etc.) |
+| `always` | Prompts confirmation for every shell command and file write |
+| `never` | No confirmation prompts |
+
+---
+
+## Slash Commands
+
+| Command | Description |
+|---|---|
+| `/help` or `/` | Show all available commands |
+| `/resume` | List recent sessions and restore one |
+| `/init` | Re-initialize the current workspace |
+| `/skills` | List loaded skills |
+| `/config` | Show current merged config |
+| `/reasoning` | Toggle reasoning mode |
+| `/thinking` | Toggle reasoning display |
+| `/memory` | Show persistent memory entries |
+| `/project` | Show detected project info |
+| `/project rescan` | Force re-scan project structure |
+| `/skill list` | List all skills (global + project) |
+| `/skill install <name>` | Install skill from global library to project |
+| `/skill remove <name>` | Remove skill from project |
+| `/skill catalog <name>` | Publish project skill to global library |
+| `/mcp list` | List configured MCP servers |
+| `/mcp add <name>` | Add MCP server from registry to project config |
+| `/mcp remove <name>` | Remove MCP server from project config |
+| `/exit` | Exit HyBot |
+
+You can also type `exit`, `quit`, `bye`, or press `Ctrl+C` to leave.
+
+---
+
+## Persistent Memory
+
+The Agent can save, query, and delete memories that persist across sessions. Memories are stored as markdown files under `~/.hybot/memory/`.
+
+**Agent tools:**
+- `save_memory(category, content)` — Save to a named category (e.g. `preferences`, `lessons_learned`)
+- `list_memories()` — List all memory categories with previews
+- `delete_memory(category)` — Delete a category
+
+**Example:**
+
+```
+> User: Remember that I prefer TypeScript over JavaScript
+# Agent calls save_memory("preferences", "User prefers TypeScript over JavaScript")
+
+> User: /memory
+# Displays a table of all saved memory categories and previews
 ```
 
 ---
 
-## Slash Commands / 斜杠命令
+## Project Awareness
 
-Type these in the interactive prompt:
+On startup, HyBot scans the workspace to detect:
 
-在交互式提示符中输入以下命令：
+- **Languages** — Python, JavaScript/TypeScript, Rust, Go, Java, C/C++, C#, Ruby, PHP, Dart, Elixir
+- **Package managers** — pip, poetry, uv, npm, yarn, pnpm, bun, cargo, go modules, maven, gradle, etc.
+- **Frameworks** — Django, Flask, Next.js, Nuxt, Angular, Vite, pytest, etc.
+- **Directory structure** — `src/`, `tests/`, `docs/`, `scripts/`, etc.
+- **Entry files** — `main.py`, `app.py`, `index.ts`, `index.js`, `main.go`, `main.rs`
+- **Git info** — Remote URL, current branch
 
-| Command / 命令 | Description / 说明 |
+Results are injected into the Agent's context and cached to `.hybot/project_info.md`. Use `/project rescan` to refresh.
+
+---
+
+## Git Tools
+
+Enabled by default (`tools.git.enabled: true`). The Agent can call:
+
+| Tool | Description |
 |---|---|
-| `/help` or `/` | Show all available commands / 显示所有可用命令 |
-| `/resume` | List recent sessions and restore one / 列出最近会话并选择恢复 |
-| `/init` | Re-initialize the current workspace / 重新初始化当前工作区 |
-| `/skills` | List loaded skills / 列出已加载的技能 |
-| `/config` | Show current merged config / 显示当前合并后的配置 |
-| `/exit` | Exit HyBot / 退出 |
+| `git_status()` | Working tree status |
+| `git_diff(cached, file_path)` | View diff (staged or unstaged) |
+| `git_log(max_entries, oneline)` | Commit history |
+| `git_add(paths)` | Stage files |
+| `git_commit(message)` | Create a commit |
+| `git_branch(create, delete)` | List, create, or delete branches |
+| `git_checkout(ref, create)` | Switch branches or create new ones |
+| `git_stash(action, message)` | Push, pop, list, or drop stashes |
+| `git_show(ref)` | Show commit details |
 
-You can also type `exit`, `quit`, or `bye` to leave, or press `Ctrl+C`.
+---
 
-也可以输入 `exit`、`quit`、`bye` 或按 `Ctrl+C` 退出。
+## Web Tools
+
+Disabled by default to avoid unintended network access. Enable in config:
+
+```yaml
+tools:
+  web:
+    enabled: true
+```
+
+Requires the `web` extra:
+
+```bash
+pip install -e ".[web]"
+```
+
+Provides DuckDuckGo search (`enable_search`) and website content fetching (`enable_fetch`).
+
+---
+
+## Sub-agents
+
+Define sub-agents as YAML files in `.hybot/agents/`. The main Agent delegates tasks to them via tool calls.
+
+**Example:** `.hybot/agents/code_reviewer.yaml`
+
+```yaml
+name: code_reviewer
+description: Reviews code quality and style
+model:
+  provider: openai
+  id: gpt-4o-mini
+instructions:
+  - "You are a strict code reviewer."
+  - "Check for style issues, potential bugs, and performance problems."
+tools:
+  - coding
+```
+
+This creates an `invoke_code_reviewer(task)` tool for the main Agent. Sub-agents are lazily loaded on first invocation.
+
+**Available tool names for sub-agents:**
+- `coding` — File operations and shell commands
+- `python` — Python code execution
+- `git` — Git operations
+
+---
+
+## Non-interactive Mode
+
+Use `--run` to execute a single task and exit:
+
+```bash
+hybot --run "list all Python files under src/"
+hybot --run "analyze project structure" --output json
+hybot --run "run tests" --project /path/to/project
+hybot --run "explain main.py" --no-stream
+```
+
+JSON output follows the `RunSummary` schema:
+
+```json
+{
+  "status": "success",
+  "summary": "Task completion summary",
+  "files_modified": ["src/main.py"],
+  "files_created": [],
+  "commands_run": ["python -m pytest"],
+  "errors": []
+}
+```
+
+The `--run` mode automatically trusts the target workspace (no interactive confirmation).
 
 ---
 
 ## AGENT.md
 
-Write project-specific instructions in `AGENT.md`. HyBot loads them from three locations (all combined if present):
+Write project-specific instructions in `AGENT.md`. HyBot loads from three locations (all combined):
 
-在 `AGENT.md` 中编写项目专属指令。HyBot 从以下三个位置加载（如存在则全部合并）：
-
-1. `~/.hybot/AGENT.md` — Global / 全局
-2. `<workspace>/AGENT.md` — Project root / 项目根目录
-3. `<workspace>/.hybot/AGENT.md` — Workspace local / 工作区本地
+1. `~/.hybot/AGENT.md` — Global
+2. `<workspace>/AGENT.md` — Project root
+3. `<workspace>/.hybot/AGENT.md` — Workspace local
 
 ---
 
-## MCP Servers / MCP 服务器
-
-Add MCP servers to extend HyBot's capabilities:
-
-添加 MCP 服务器以扩展 HyBot 的能力：
+## MCP Servers
 
 ```yaml
 mcp_servers:
-  # stdio transport — spawns a subprocess / 标准 IO 传输 — 启动子进程
+  # stdio transport — spawns a subprocess
   - name: "filesystem"
     command: "npx -y @modelcontextprotocol/server-filesystem /tmp"
 
-  # HTTP transport — connects to a running server / HTTP 传输 — 连接运行中的服务器
+  # HTTP transport — connects to a running server
   - name: "my-server"
     url: "http://localhost:8080"
     transport: "streamable-http"
@@ -204,35 +374,58 @@ mcp_servers:
       API_KEY: "xxx"
 ```
 
----
+**MCP Registry:** Create `~/.hybot/mcp_registry.yaml` to define reusable templates, then use `/mcp add <name>` to add them to any project.
 
-## Skills / 技能
-
-Place skill packages in the skills directory (`~/.hybot/skills/` by default). HyBot discovers and loads them automatically at startup.
-
-将技能包放入技能目录（默认为 `~/.hybot/skills/`），HyBot 在启动时自动发现并加载。
-
-See `skills/weather/` and `skills/fetch_markdown/` for examples.
-
-参考 `skills/weather/` 和 `skills/fetch_markdown/` 了解编写方式。
-
----
-
-## Project Structure / 项目结构
-
-```
-├── src/hybot/
-│   ├── __main__.py     # CLI entry point / CLI 入口
-│   ├── agent.py        # Agent builder & interactive loop / Agent 构建与交互循环
-│   ├── commands.py     # Slash command registry / 斜杠命令注册
-│   └── config.py       # Config models & loading / 配置模型与加载
-├── skills/             # Example skill packages / 示例技能包
-├── config.yaml         # Default config / 默认配置
-└── pyproject.toml      # Package metadata / 包元数据
+```yaml
+# ~/.hybot/mcp_registry.yaml
+servers:
+  filesystem:
+    command: "npx -y @modelcontextprotocol/server-filesystem /tmp"
+  brave-search:
+    command: "npx -y @anthropic/mcp-server-brave-search"
+    env:
+      BRAVE_API_KEY: "xxx"
 ```
 
 ---
 
-## License / 许可证
+## Skills
+
+Place skill packages in the skills directory (`~/.hybot/skills/` by default). HyBot discovers and loads them at startup.
+
+**Lifecycle commands:**
+
+| Command | Description |
+|---|---|
+| `/skill list` | List skills in global library and project |
+| `/skill install <name>` | Copy from global library to project |
+| `/skill remove <name>` | Remove from project |
+| `/skill catalog <name>` | Publish project skill to global library |
+
+---
+
+## Project Structure
+
+```
+src/hybot/
+├── __init__.py
+├── __main__.py          # CLI entry point with --run support
+├── agent.py             # Agent builder, interactive loop & non-interactive mode
+├── commands.py          # Slash command registry & dispatch
+├── config.py            # Pydantic config models & layered loading
+├── memory.py            # Persistent memory (MemoryStore + MemoryTools)
+├── project_scanner.py   # Project structure detection & caching
+├── schemas.py           # Structured output models (RunSummary)
+├── subagent.py          # Sub-agent YAML loading & dynamic tool registration
+├── lifecycle.py         # Skill & MCP lifecycle management
+└── tools/
+    ├── __init__.py
+    ├── guarded_coding.py  # CodingTools with danger confirmation
+    └── git_tools.py       # Git CLI wrapper toolkit
+```
+
+---
+
+## License
 
 MIT

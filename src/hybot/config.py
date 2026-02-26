@@ -68,9 +68,35 @@ class PythonToolsConfig(BaseModel):
     enabled: bool = True
 
 
+class GitToolsConfig(BaseModel):
+    enabled: bool = True
+
+
+class WebToolsConfig(BaseModel):
+    enabled: bool = False  # 默认关闭，避免意外联网
+    enable_search: bool = True
+    enable_fetch: bool = True
+
+
 class ToolsConfig(BaseModel):
     coding: CodingToolsConfig = Field(default_factory=CodingToolsConfig)
     python: PythonToolsConfig = Field(default_factory=PythonToolsConfig)
+    git: GitToolsConfig = Field(default_factory=GitToolsConfig)
+    web: WebToolsConfig = Field(default_factory=WebToolsConfig)
+
+
+class MemoryConfig(BaseModel):
+    enabled: bool = True
+    path: str = "~/.hybot/memory"
+
+
+class ApprovalConfig(BaseModel):
+    mode: str = "dangerous"  # "always" | "dangerous" | "never"
+
+
+class ProjectConfig(BaseModel):
+    scan_on_startup: bool = True
+    cache_scan: bool = True
 
 
 class StorageConfig(BaseModel):
@@ -97,6 +123,9 @@ class AppConfig(BaseModel):
     storage: StorageConfig = Field(default_factory=StorageConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     mcp_servers: list[MCPServerConfig] = Field(default_factory=list)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    approval: ApprovalConfig = Field(default_factory=ApprovalConfig)
+    project: ProjectConfig = Field(default_factory=ProjectConfig)
 
 
 def default_config_path() -> Path:

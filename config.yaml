@@ -21,10 +21,27 @@ agent:
 tools:
   coding:
     enabled: true
-    base_dir: "."                    # 工作目录
+    base_dir: "."                    # 工作目录（自动设置为工作区根目录）
     all: true                        # 启用所有 CodingTools
   python:
     enabled: true                    # 启用 PythonTools
+  git:
+    enabled: true                    # 启用 Git 工具（status/diff/log/commit 等）
+  web:
+    enabled: false                   # Web 工具默认关闭，避免意外联网
+    enable_search: true              # DuckDuckGo 搜索（需 pip install -e ".[web]"）
+    enable_fetch: true               # 网页内容抓取
+
+memory:
+  enabled: true                      # 持久记忆系统
+  path: "~/.hybot/memory"            # 记忆存储目录
+
+approval:
+  mode: "dangerous"                  # 操作确认模式："always" | "dangerous" | "never"
+
+project:
+  scan_on_startup: true              # 启动时自动扫描项目结构
+  cache_scan: true                   # 缓存扫描结果到 .hybot/project_info.md
 
 storage:
   type: "sqlite"

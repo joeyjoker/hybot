@@ -18,6 +18,7 @@ from agno.db.sqlite import SqliteDb
 from agno.skills import Skills
 
 from hybot.config import AppConfig, init_workspace
+from hybot.memory import MemoryStore
 
 console = Console()
 
@@ -32,6 +33,7 @@ class CommandContext:
     skills: Skills | None
     agent: Agent
     show_reasoning: bool = True
+    memory_store: MemoryStore | None = None
 
 
 @dataclass
@@ -40,7 +42,7 @@ class SlashCommand:
 
     name: str
     description: str
-    handler: Callable[[CommandContext], Awaitable[None]]
+    handler: Callable[[CommandContext, str], Awaitable[None]]
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +50,7 @@ class SlashCommand:
 # ---------------------------------------------------------------------------
 
 
-async def cmd_help(ctx: CommandContext) -> None:
+async def cmd_help(ctx: CommandContext, args: str = "") -> None:
     """显示所有可用命令。"""
     table = Table(title="可用命令", show_header=True, header_style="bold cyan")
     table.add_column("命令", style="green")
@@ -65,7 +67,7 @@ async def cmd_help(ctx: CommandContext) -> None:
     console.print(table)
 
 
-async def cmd_resume(ctx: CommandContext) -> None:
+async def cmd_resume(ctx: CommandContext, args: str = "") -> None:
     """列出最近会话，选择恢复。"""
     if ctx.db is None:
         console.print("[yellow]未配置存储，无法恢复会话。[/yellow]")
@@ -125,13 +127,13 @@ async def cmd_resume(ctx: CommandContext) -> None:
         console.print("[red]请输入有效数字。[/red]")
 
 
-async def cmd_init(ctx: CommandContext) -> None:
+async def cmd_init(ctx: CommandContext, args: str = "") -> None:
     """重新初始化当前工作区。"""
     init_workspace(ctx.workspace)
     console.print(f"[green]工作区已初始化：{ctx.workspace}[/green]")
 
 
-async def cmd_skills(ctx: CommandContext) -> None:
+async def cmd_skills(ctx: CommandContext, args: str = "") -> None:
     """列出可用 Skills 并选择查看。"""
     if ctx.skills is None:
         console.print("[yellow]未配置 Skills。[/yellow]")
@@ -171,7 +173,7 @@ async def cmd_skills(ctx: CommandContext) -> None:
         console.print("[red]请输入有效数字。[/red]")
 
 
-async def cmd_config(ctx: CommandContext) -> None:
+async def cmd_config(ctx: CommandContext, args: str = "") -> None:
     """显示当前合并后的配置。"""
     config_dict = ctx.config.model_dump()
     # 隐藏敏感字段
@@ -182,23 +184,114 @@ async def cmd_config(ctx: CommandContext) -> None:
     console.print(syntax)
 
 
-async def cmd_reasoning(ctx: CommandContext) -> None:
+async def cmd_reasoning(ctx: CommandContext, args: str = "") -> None:
     """切换 Agent 推理（reasoning）能力。"""
     ctx.agent.reasoning = not ctx.agent.reasoning
     status = "[green]已开启[/green]" if ctx.agent.reasoning else "[yellow]已关闭[/yellow]"
     console.print(f"Reasoning 能力：{status}")
 
 
-async def cmd_thinking(ctx: CommandContext) -> None:
+async def cmd_thinking(ctx: CommandContext, args: str = "") -> None:
     """切换思考过程的显示。"""
     ctx.show_reasoning = not ctx.show_reasoning
     status = "[green]显示[/green]" if ctx.show_reasoning else "[yellow]隐藏[/yellow]"
     console.print(f"思考过程：{status}")
 
 
-async def cmd_exit(ctx: CommandContext) -> None:
+async def cmd_exit(ctx: CommandContext, args: str = "") -> None:
     """退出 CLI。"""
     raise SystemExit(0)
+
+
+async def cmd_skill(ctx: CommandContext, args: str = "") -> None:
+    """Skill 生命周期管理。子命令：list, install <name>, remove <name>, catalog <name>。"""
+    from hybot.config import HYBOT_HOME
+    from hybot.lifecycle import catalog_skill, install_skill, list_skills, remove_skill
+
+    global_skills_dir = HYBOT_HOME / "skills"
+    project_skills_dir = ctx.workspace / ".hybot" / "skills"
+
+    parts = args.strip().split(maxsplit=1)
+    sub = parts[0].lower() if parts else "list"
+    sub_args = parts[1].strip() if len(parts) > 1 else ""
+
+    if sub == "list":
+        list_skills(global_skills_dir, project_skills_dir)
+    elif sub == "install":
+        if not sub_args:
+            console.print("[red]用法: /skill install <name>[/red]")
+            return
+        install_skill(sub_args, global_skills_dir, project_skills_dir)
+    elif sub == "remove":
+        if not sub_args:
+            console.print("[red]用法: /skill remove <name>[/red]")
+            return
+        remove_skill(sub_args, project_skills_dir)
+    elif sub == "catalog":
+        if not sub_args:
+            console.print("[red]用法: /skill catalog <name>[/red]")
+            return
+        catalog_skill(sub_args, project_skills_dir, global_skills_dir)
+    else:
+        console.print(f"[red]未知子命令: {sub}。支持: list, install, remove, catalog[/red]")
+
+
+async def cmd_mcp(ctx: CommandContext, args: str = "") -> None:
+    """MCP 服务管理。子命令：list, add <name>, remove <name>。"""
+    from hybot.lifecycle import add_mcp_server, list_mcp_servers, remove_mcp_server
+
+    parts = args.strip().split(maxsplit=1)
+    sub = parts[0].lower() if parts else "list"
+    sub_args = parts[1].strip() if len(parts) > 1 else ""
+
+    if sub == "list":
+        list_mcp_servers(ctx.config.mcp_servers)
+    elif sub == "add":
+        if not sub_args:
+            console.print("[red]用法: /mcp add <name>[/red]")
+            return
+        add_mcp_server(sub_args, ctx.workspace)
+    elif sub == "remove":
+        if not sub_args:
+            console.print("[red]用法: /mcp remove <name>[/red]")
+            return
+        remove_mcp_server(sub_args, ctx.workspace)
+    else:
+        console.print(f"[red]未知子命令: {sub}。支持: list, add, remove[/red]")
+
+
+async def cmd_memory(ctx: CommandContext, args: str = "") -> None:
+    """显示所有记忆分类及内容预览。"""
+    if ctx.memory_store is None:
+        console.print("[yellow]记忆系统未启用。[/yellow]")
+        return
+    entries = ctx.memory_store.list_entries()
+    if not entries:
+        console.print("[yellow]当前没有保存任何记忆。[/yellow]")
+        return
+    table = Table(title="持久记忆", show_header=True, header_style="bold cyan")
+    table.add_column("分类", style="green")
+    table.add_column("内容预览")
+    for cat, summary in entries.items():
+        table.add_row(cat, summary)
+    console.print(table)
+
+
+async def cmd_project(ctx: CommandContext, args: str = "") -> None:
+    """显示项目信息，支持 /project rescan 强制重新扫描。"""
+    from hybot.project_scanner import load_or_scan, scan_project
+
+    if args.strip().lower() == "rescan":
+        info = scan_project(ctx.workspace)
+        # 更新缓存
+        cache_path = ctx.workspace / ".hybot" / "project_info.md"
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(info, encoding="utf-8")
+        console.print("[green]已重新扫描项目。[/green]\n")
+    else:
+        info = load_or_scan(ctx.workspace, cache=ctx.config.project.cache_scan)
+    from rich.markdown import Markdown
+    console.print(Markdown(info))
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +301,7 @@ async def cmd_exit(ctx: CommandContext) -> None:
 COMMANDS: dict[str, SlashCommand] = {}
 
 
-def _register(name: str, description: str, handler: Callable[[CommandContext], Awaitable[None]]) -> None:
+def _register(name: str, description: str, handler: Callable[[CommandContext, str], Awaitable[None]]) -> None:
     COMMANDS[name] = SlashCommand(name=name, description=description, handler=handler)
 
 
@@ -219,6 +312,10 @@ _register("skills", "列出可用 Skills 并选择执行", cmd_skills)
 _register("config", "显示当前合并后的配置", cmd_config)
 _register("reasoning", "开关 Reasoning 推理能力", cmd_reasoning)
 _register("thinking", "开关思考过程显示", cmd_thinking)
+_register("memory", "查看持久记忆列表", cmd_memory)
+_register("project", "查看项目信息（rescan 重新扫描）", cmd_project)
+_register("skill", "Skill 管理（list/install/remove/catalog）", cmd_skill)
+_register("mcp", "MCP 服务管理（list/add/remove）", cmd_mcp)
 _register("exit", "退出 CLI", cmd_exit)
 
 
@@ -245,8 +342,9 @@ async def handle_slash_command(user_input: str, ctx: CommandContext) -> None:
     cmd_name = parts[0].lower()
 
     # 1. 匹配内置命令
+    cmd_args = parts[1] if len(parts) > 1 else ""
     if cmd_name in COMMANDS:
-        await COMMANDS[cmd_name].handler(ctx)
+        await COMMANDS[cmd_name].handler(ctx, cmd_args)
         return
 
     # 2. 匹配 Skill 名称，通过 Agent 调用

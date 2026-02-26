@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import contextlib
+import json
+import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
-from agno.tools.coding import CodingTools
 from agno.tools.mcp import MCPTools
 from agno.tools.python import PythonTools
 from prompt_toolkit import PromptSession
@@ -16,10 +19,31 @@ from prompt_toolkit.formatted_text import HTML
 
 from hybot.commands import COMMANDS, CommandContext, handle_slash_command
 from hybot.config import AppConfig, load_agent_md
+from hybot.memory import MemoryStore, MemoryTools
+from hybot.project_scanner import load_or_scan
+from hybot.tools.guarded_coding import GuardedCodingTools
+
+
+SUBCOMMANDS: dict[str, list[tuple[str, str]]] = {
+    "skill": [
+        ("list", "列出所有 skill"),
+        ("install", "从全局库安装 skill"),
+        ("remove", "从项目移除 skill"),
+        ("catalog", "将 skill 上报到全局库"),
+    ],
+    "mcp": [
+        ("list", "列出 MCP 服务"),
+        ("add", "添加 MCP 服务"),
+        ("remove", "移除 MCP 服务"),
+    ],
+    "project": [
+        ("rescan", "强制重新扫描项目"),
+    ],
+}
 
 
 class SlashCompleter(Completer):
-    """斜杠命令与 Skill 自动补全。"""
+    """斜杠命令与 Skill 自动补全，支持子命令。"""
 
     def __init__(
         self,
@@ -34,9 +58,23 @@ class SlashCompleter(Completer):
         if not text.startswith("/"):
             return
         word = text[1:]
-        # 已有空格说明在输入参数，不再补全命令名
+
         if " " in word:
+            # 子命令补全
+            cmd_name, sub_word = word.split(maxsplit=1)
+            # 如果 sub_word 中还有空格，说明已经输完子命令了
+            if " " in sub_word:
+                return
+            subcmds = SUBCOMMANDS.get(cmd_name, [])
+            for sub_name, sub_desc in subcmds:
+                if sub_name.startswith(sub_word):
+                    yield Completion(
+                        sub_name,
+                        start_position=-len(sub_word),
+                        display_meta=sub_desc,
+                    )
             return
+
         for name, cmd in self.commands.items():
             if name.startswith(word):
                 yield Completion(
@@ -85,12 +123,24 @@ def _build_model(config: AppConfig):
     raise ValueError(f"不支持的 model provider: {provider}")
 
 
-async def build_and_run(
+@dataclass
+class AgentStack:
+    """Agent 构建产物，便于在不同模式间共享。"""
+
+    agent: Agent
+    memory_store: MemoryStore | None
+    db: SqliteDb | None
+    skills: Any
+    mcp_tools: list[MCPTools]
+
+
+async def _build_agent_stack(
     config: AppConfig,
+    workspace: Path,
     session_id: str | None = None,
-    workspace: Path | None = None,
-) -> None:
-    """构建 Agent 并启动交互式 CLI 循环。"""
+    exit_stack: contextlib.AsyncExitStack | None = None,
+) -> AgentStack:
+    """构建 Agent 及其所有依赖，返回 AgentStack。"""
 
     # 1. 构建 Model
     model = _build_model(config)
@@ -99,13 +149,43 @@ async def build_and_run(
     tools: list = []
     if config.tools.coding.enabled:
         tools.append(
-            CodingTools(
+            GuardedCodingTools(
+                approval_mode=config.approval.mode,
                 base_dir=config.tools.coding.base_dir,
                 all=config.tools.coding.all,
             )
         )
     if config.tools.python.enabled:
         tools.append(PythonTools())
+
+    # 2a. 记忆工具
+    memory_store: MemoryStore | None = None
+    if config.memory.enabled:
+        memory_store = MemoryStore(path=config.memory.path)
+        tools.append(MemoryTools(store=memory_store))
+
+    # 2b. Git 工具
+    if config.tools.git.enabled:
+        from hybot.tools.git_tools import GitTools
+        tools.append(GitTools(base_dir=str(workspace)))
+
+    # 2c. Web 工具
+    if config.tools.web.enabled:
+        try:
+            if config.tools.web.enable_search:
+                from agno.tools.duckduckgo import DuckDuckGoTools
+                tools.append(DuckDuckGoTools())
+            if config.tools.web.enable_fetch:
+                from agno.tools.website import WebsiteTools
+                tools.append(WebsiteTools())
+        except ImportError:
+            pass  # web 依赖未安装时静默跳过
+
+    # 2d. Sub-agent 工具
+    from hybot.subagent import SubAgentTools, load_subagent_configs
+    subagent_configs = load_subagent_configs(workspace)
+    if subagent_configs:
+        tools.append(SubAgentTools(subagent_configs, workspace))
 
     # 3. 构建 MCP 工具列表
     mcp_tools: list[MCPTools] = []
@@ -119,6 +199,12 @@ async def build_and_run(
                     transport=mcp_cfg.transport or "streamable-http",
                 )
             )
+
+    if exit_stack:
+        for mcp in mcp_tools:
+            await exit_stack.enter_async_context(mcp)
+
+    all_tools = tools + mcp_tools
 
     # 4. 构建 Skills（可选）
     skills = None
@@ -136,48 +222,76 @@ async def build_and_run(
         Path(db_file).parent.mkdir(parents=True, exist_ok=True)
         db = SqliteDb(db_file=db_file)
 
-    # 6. 使用 AsyncExitStack 管理 MCP 连接生命周期
+    # 6. 组装 instructions
+    agent_md_instructions = load_agent_md(workspace)
+    all_instructions = list(config.agent.instructions) + agent_md_instructions
+
+    # 7. 组装 additional_context：记忆 + 项目信息
+    context_parts: list[str] = []
+    if memory_store:
+        memory_content = memory_store.load_all()
+        if memory_content:
+            context_parts.append(f"## Persistent Memory\n{memory_content}")
+    if config.project.scan_on_startup:
+        project_info = load_or_scan(workspace, cache=config.project.cache_scan)
+        if project_info:
+            context_parts.append(f"## Project Context\n{project_info}")
+    additional_context = "\n\n".join(context_parts) or None
+
+    # 8. 构建 Agent
+    agent = Agent(
+        model=model,
+        name=config.agent.name,
+        description=config.agent.description,
+        instructions=all_instructions,
+        tools=all_tools,
+        skills=skills,
+        db=db,
+        markdown=config.agent.markdown,
+        stream=config.agent.stream,
+        reasoning=config.agent.reasoning,
+        add_history_to_context=config.agent.add_history_to_context,
+        num_history_runs=config.agent.num_history_runs,
+        add_datetime_to_context=config.agent.add_datetime_to_context,
+        session_id=session_id,
+        additional_context=additional_context,
+    )
+
+    return AgentStack(
+        agent=agent,
+        memory_store=memory_store,
+        db=db,
+        skills=skills,
+        mcp_tools=mcp_tools,
+    )
+
+
+async def build_and_run(
+    config: AppConfig,
+    session_id: str | None = None,
+    workspace: Path | None = None,
+) -> None:
+    """构建 Agent 并启动交互式 CLI 循环。"""
+    ws = workspace or Path.cwd()
+
     async with contextlib.AsyncExitStack() as stack:
-        for mcp in mcp_tools:
-            await stack.enter_async_context(mcp)
-
-        all_tools = tools + mcp_tools
-
-        # 读取 AGENT.md 指令并追加到 instructions
-        agent_md_instructions = load_agent_md(workspace or Path.cwd())
-        all_instructions = list(config.agent.instructions) + agent_md_instructions
-
-        agent = Agent(
-            model=model,
-            name=config.agent.name,
-            description=config.agent.description,
-            instructions=all_instructions,
-            tools=all_tools,
-            skills=skills,
-            db=db,
-            markdown=config.agent.markdown,
-            stream=config.agent.stream,
-            reasoning=config.agent.reasoning,
-            add_history_to_context=config.agent.add_history_to_context,
-            num_history_runs=config.agent.num_history_runs,
-            add_datetime_to_context=config.agent.add_datetime_to_context,
-            session_id=session_id,
-        )
+        st = await _build_agent_stack(config, ws, session_id=session_id, exit_stack=stack)
 
         # 自定义 CLI 循环（支持斜杠命令拦截）
         ctx = CommandContext(
             config=config,
-            workspace=workspace or Path.cwd(),
-            db=db,
-            skills=skills,
-            agent=agent,
+            workspace=ws,
+            db=st.db,
+            skills=st.skills,
+            agent=st.agent,
             show_reasoning=config.agent.show_reasoning,
+            memory_store=st.memory_store,
         )
 
         # 构建自动补全器
         skill_entries: list[tuple[str, str]] = []
-        if skills:
-            for s in skills.get_all_skills():
+        if st.skills:
+            for s in st.skills.get_all_skills():
                 skill_entries.append((s.name, s.description or ""))
         completer = SlashCompleter(COMMANDS, skill_entries)
         prompt_session: PromptSession[str] = PromptSession(
@@ -204,9 +318,72 @@ async def build_and_run(
                     break
                 continue
 
-            await agent.aprint_response(
+            await st.agent.aprint_response(
                 message,
                 stream=config.agent.stream,
                 markdown=config.agent.markdown,
                 show_reasoning=ctx.show_reasoning,
             )
+
+
+async def build_and_run_once(
+    config: AppConfig,
+    task: str,
+    workspace: Path | None = None,
+    output_format: str = "text",
+) -> int:
+    """非交互模式：执行单个任务后退出，返回 exit code。"""
+    ws = workspace or Path.cwd()
+
+    async with contextlib.AsyncExitStack() as stack:
+        st = await _build_agent_stack(config, ws, exit_stack=stack)
+
+        try:
+            if output_format == "json":
+                # JSON 模式：先执行任务
+                response = await st.agent.arun(task)
+                # 再让 Agent 总结为结构化输出
+                from hybot.schemas import RunSummary
+                summary_prompt = (
+                    "请根据你刚才执行的任务结果，生成一个 JSON 格式的总结，包含以下字段：\n"
+                    '- status: "success" 或 "error" 或 "partial"\n'
+                    "- summary: 简短总结\n"
+                    "- files_modified: 修改的文件列表\n"
+                    "- files_created: 创建的文件列表\n"
+                    "- commands_run: 执行的命令列表\n"
+                    "- errors: 错误列表\n"
+                    "只输出 JSON，不要其他内容。"
+                )
+                summary_response = await st.agent.arun(summary_prompt)
+                # 尝试从回复中提取 JSON
+                content = summary_response.content if summary_response else ""
+                try:
+                    # 尝试从 markdown code block 中提取
+                    if "```json" in content:
+                        content = content.split("```json")[1].split("```")[0]
+                    elif "```" in content:
+                        content = content.split("```")[1].split("```")[0]
+                    data = json.loads(content.strip())
+                    summary = RunSummary(**data)
+                except (json.JSONDecodeError, IndexError, ValueError):
+                    summary = RunSummary(
+                        status="success",
+                        summary=content[:500] if content else "任务已完成。",
+                    )
+                print(summary.model_dump_json(indent=2))
+            else:
+                # Text 模式：直接流式输出
+                await st.agent.aprint_response(
+                    task,
+                    stream=config.agent.stream,
+                    markdown=config.agent.markdown,
+                )
+            return 0
+        except Exception as e:
+            if output_format == "json":
+                from hybot.schemas import RunSummary
+                summary = RunSummary(status="error", errors=[str(e)])
+                print(summary.model_dump_json(indent=2), file=sys.stderr)
+            else:
+                print(f"Error: {e}", file=sys.stderr)
+            return 1
