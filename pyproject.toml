@@ -24,3 +24,6 @@ hybot = "hybot.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+hybot = ["default_skills/**/*"]

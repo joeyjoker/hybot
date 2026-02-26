@@ -206,14 +206,30 @@ async def _build_agent_stack(
 
     all_tools = tools + mcp_tools
 
-    # 4. 构建 Skills（可选）
+    # 4. 构建 Skills（内置默认 + 全局 + 项目本地）
     skills = None
-    if config.skills.path:
-        from agno.skills import LocalSkills, Skills
+    from agno.skills import LocalSkills, Skills
 
+    loaders: list = []
+    # 4a. 内置默认 skills（随包分发）
+    default_skills_dir = Path(__file__).parent / "default_skills"
+    if default_skills_dir.is_dir():
+        loaders.append(LocalSkills(path=str(default_skills_dir)))
+    # 4b. 全局 skills 目录（validate=False 避免无效 skill 导致全部加载失败）
+    if config.skills.path:
         skills_path = str(Path(config.skills.path).expanduser())
         Path(skills_path).mkdir(parents=True, exist_ok=True)
-        skills = Skills(loaders=[LocalSkills(path=skills_path)])
+        loaders.append(LocalSkills(path=skills_path, validate=False))
+    # 4c. 项目本地 skills 目录
+    project_skills_dir = workspace / ".hybot" / "skills"
+    if project_skills_dir.is_dir():
+        loaders.append(LocalSkills(path=str(project_skills_dir), validate=False))
+    if loaders:
+        try:
+            skills = Skills(loaders=loaders)
+        except Exception as e:
+            import logging
+            logging.warning(f"Skills 加载失败（已跳过）: {e}")
 
     # 5. 构建 Storage
     db = None
@@ -316,14 +332,26 @@ async def build_and_run(
                     await handle_slash_command(message, ctx)
                 except SystemExit:
                     break
+                except KeyboardInterrupt:
+                    print("\n[已中断]")
                 continue
 
-            await st.agent.aprint_response(
-                message,
-                stream=config.agent.stream,
-                markdown=config.agent.markdown,
-                show_reasoning=ctx.show_reasoning,
-            )
+            try:
+                await st.agent.aprint_response(
+                    message,
+                    stream=config.agent.stream,
+                    markdown=config.agent.markdown,
+                    show_reasoning=ctx.show_reasoning,
+                )
+            except KeyboardInterrupt:
+                print("\n[已中断]")
+
+            # 每次回复后 reload skills，使新创建的 skill 立刻可用
+            if st.skills:
+                try:
+                    st.skills.reload()
+                except Exception:
+                    pass
 
 
 async def build_and_run_once(
