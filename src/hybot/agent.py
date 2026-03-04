@@ -19,6 +19,7 @@ from prompt_toolkit.formatted_text import HTML
 
 from hybot.commands import COMMANDS, CommandContext, handle_slash_command
 from hybot.config import AppConfig, load_agent_md
+from hybot.conversation_log import ConversationLogger
 from hybot.memory import MemoryStore, MemoryTools
 from hybot.project_scanner import load_or_scan
 from hybot.tools.guarded_coding import GuardedCodingTools
@@ -38,6 +39,10 @@ SUBCOMMANDS: dict[str, list[tuple[str, str]]] = {
     ],
     "project": [
         ("rescan", "强制重新扫描项目"),
+    ],
+    "history": [
+        ("search", "搜索历史对话"),
+        ("load", "查看某次对话全文"),
     ],
 }
 
@@ -254,7 +259,15 @@ async def _build_agent_stack(
             context_parts.append(f"## Project Context\n{project_info}")
     additional_context = "\n\n".join(context_parts) or None
 
-    # 8. 构建 Agent
+    # 8. 构建压缩管理器
+    compression_manager = None
+    if config.context.compress_tool_results:
+        from agno.compression.manager import CompressionManager
+        compression_manager = CompressionManager(
+            compress_tool_results_limit=config.context.compress_tool_results_limit,
+        )
+
+    # 9. 构建 Agent
     agent = Agent(
         model=model,
         name=config.agent.name,
@@ -267,10 +280,16 @@ async def _build_agent_stack(
         stream=config.agent.stream,
         reasoning=config.agent.reasoning,
         add_history_to_context=config.agent.add_history_to_context,
-        num_history_runs=config.agent.num_history_runs,
+        num_history_runs=config.context.num_history_runs,
         add_datetime_to_context=config.agent.add_datetime_to_context,
         session_id=session_id,
         additional_context=additional_context,
+        # 上下文压缩与摘要
+        compress_tool_results=config.context.compress_tool_results,
+        compression_manager=compression_manager,
+        max_tool_calls_from_history=config.context.max_tool_calls_from_history,
+        enable_session_summaries=config.context.enable_session_summaries,
+        add_session_summary_to_context=config.context.enable_session_summaries,
     )
 
     return AgentStack(
@@ -280,6 +299,52 @@ async def _build_agent_stack(
         skills=skills,
         mcp_tools=mcp_tools,
     )
+
+
+_CONTEXT_OVERFLOW_KEYWORDS = [
+    "context window",
+    "context_length_exceeded",
+    "exceeds the model",
+    "too many tokens",
+    "maximum context length",
+    "token limit",
+    "input is too long",
+    "request too large",
+]
+
+
+def _is_context_overflow(exc: Exception) -> bool:
+    """检查异常是否为上下文超限错误。"""
+    msg = str(exc).lower()
+    return any(kw in msg for kw in _CONTEXT_OVERFLOW_KEYWORDS)
+
+
+async def _handle_context_overflow(st: AgentStack, config: AppConfig) -> None:
+    """上下文超限恢复策略：减少历史轮次，触发摘要和压缩。"""
+    agent = st.agent
+
+    # 1. 将 num_history_runs 减半（最小为 1）
+    old_runs = agent.num_history_runs or config.context.num_history_runs
+    new_runs = max(1, old_runs // 2)
+    agent.num_history_runs = new_runs
+    print(f"  → 历史轮次 {old_runs} → {new_runs}")
+
+    # 2. 尝试生成会话摘要以保留上下文语义
+    if agent.session_summary_manager and hasattr(agent, "session"):
+        try:
+            await agent.session_summary_manager.acreate_session_summary(agent.session)
+            print("  → 已生成会话摘要")
+        except Exception:
+            pass
+
+    # 3. 强制压缩所有未压缩的工具结果
+    if agent.compression_manager and hasattr(agent, "session") and agent.session:
+        try:
+            messages = agent.session.get_messages()
+            await agent.compression_manager.acompress(messages)
+            print("  → 已压缩工具调用结果")
+        except Exception:
+            pass
 
 
 async def build_and_run(
@@ -293,6 +358,12 @@ async def build_and_run(
     async with contextlib.AsyncExitStack() as stack:
         st = await _build_agent_stack(config, ws, session_id=session_id, exit_stack=stack)
 
+        # 初始化对话日志
+        conv_logger: ConversationLogger | None = None
+        if config.context.save_conversations:
+            log_dir = Path(config.context.conversation_log_dir).expanduser()
+            conv_logger = ConversationLogger(log_dir)
+
         # 自定义 CLI 循环（支持斜杠命令拦截）
         ctx = CommandContext(
             config=config,
@@ -302,6 +373,7 @@ async def build_and_run(
             agent=st.agent,
             show_reasoning=config.agent.show_reasoning,
             memory_store=st.memory_store,
+            conversation_logger=conv_logger,
         )
 
         # 构建自动补全器
@@ -345,6 +417,21 @@ async def build_and_run(
                 )
             except KeyboardInterrupt:
                 print("\n[已中断]")
+            except Exception as e:
+                if _is_context_overflow(e):
+                    print("[上下文已满，正在压缩历史并重试...]")
+                    await _handle_context_overflow(st, config)
+                    try:
+                        await st.agent.aprint_response(
+                            message,
+                            stream=config.agent.stream,
+                            markdown=config.agent.markdown,
+                            show_reasoning=ctx.show_reasoning,
+                        )
+                    except Exception as retry_err:
+                        print(f"[重试失败: {retry_err}]")
+                else:
+                    raise
 
             # 每次回复后 reload skills，使新创建的 skill 立刻可用
             if st.skills:
@@ -352,6 +439,17 @@ async def build_and_run(
                     st.skills.reload()
                 except Exception:
                     pass
+
+        # 退出循环后保存对话全文
+        if conv_logger:
+            try:
+                sid = st.agent.session_id or "unknown"
+                messages = st.agent.get_chat_history()
+                if messages:
+                    path = conv_logger.save(sid, messages)
+                    print(f"[对话已保存至 {path}]")
+            except Exception as e:
+                print(f"[对话保存失败: {e}]")
 
 
 async def build_and_run_once(

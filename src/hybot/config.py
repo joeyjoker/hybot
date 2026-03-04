@@ -90,6 +90,16 @@ class MemoryConfig(BaseModel):
     path: str = "~/.hybot/memory"
 
 
+class ContextConfig(BaseModel):
+    compress_tool_results: bool = True          # 启用工具结果压缩
+    compress_tool_results_limit: int = 5        # 累积 N 个未压缩工具结果后触发压缩
+    num_history_runs: int = 10                  # 历史对话轮次上限
+    max_tool_calls_from_history: int = 20       # 历史中最多保留的工具调用数
+    enable_session_summaries: bool = True        # 启用会话摘要
+    save_conversations: bool = True             # 自动保存对话全文
+    conversation_log_dir: str = "~/.hybot/conversations"
+
+
 class ApprovalConfig(BaseModel):
     mode: str = "dangerous"  # "always" | "dangerous" | "never"
 
@@ -119,6 +129,7 @@ class MCPServerConfig(BaseModel):
 class AppConfig(BaseModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
+    context: ContextConfig = Field(default_factory=ContextConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)

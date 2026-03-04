@@ -18,6 +18,15 @@ agent:
   num_history_runs: 10
   add_datetime_to_context: true
 
+context:
+  compress_tool_results: true          # 启用工具结果压缩（使用模型自动压缩工具调用返回值）
+  compress_tool_results_limit: 5       # 累积 N 个未压缩工具结果后触发压缩
+  num_history_runs: 10                 # 历史对话轮次上限
+  max_tool_calls_from_history: 20      # 历史中最多保留的工具调用数
+  enable_session_summaries: true       # 启用会话摘要（减少历史时保留上下文语义）
+  save_conversations: true             # 退出时自动保存对话全文
+  conversation_log_dir: "~/.hybot/conversations"  # 对话存档目录
+
 tools:
   coding:
     enabled: true

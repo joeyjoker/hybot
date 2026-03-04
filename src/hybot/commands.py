@@ -18,6 +18,7 @@ from agno.db.sqlite import SqliteDb
 from agno.skills import Skills
 
 from hybot.config import AppConfig, init_workspace
+from hybot.conversation_log import ConversationLogger
 from hybot.memory import MemoryStore
 
 console = Console()
@@ -34,6 +35,7 @@ class CommandContext:
     agent: Agent
     show_reasoning: bool = True
     memory_store: MemoryStore | None = None
+    conversation_logger: ConversationLogger | None = None
 
 
 @dataclass
@@ -294,6 +296,84 @@ async def cmd_project(ctx: CommandContext, args: str = "") -> None:
     console.print(Markdown(info))
 
 
+async def cmd_history(ctx: CommandContext, args: str = "") -> None:
+    """对话历史管理。子命令：(无参)列出记录, search <keyword>, load <filename>。"""
+    if ctx.conversation_logger is None:
+        console.print("[yellow]对话存档未启用。请在配置中设置 context.save_conversations: true[/yellow]")
+        return
+
+    parts = args.strip().split(maxsplit=1)
+    sub = parts[0].lower() if parts else ""
+    sub_args = parts[1].strip() if len(parts) > 1 else ""
+
+    if sub == "search":
+        if not sub_args:
+            console.print("[red]用法: /history search <关键词>[/red]")
+            return
+        results = ctx.conversation_logger.search(sub_args)
+        if not results:
+            console.print(f"[yellow]未找到包含 \"{sub_args}\" 的对话记录。[/yellow]")
+            return
+        table = Table(title=f"搜索结果: {sub_args}", show_header=True, header_style="bold cyan")
+        table.add_column("文件", style="green")
+        table.add_column("Session ID")
+        table.add_column("匹配片段")
+        for r in results:
+            snippets = "\n".join(r["matches"][:3])
+            table.add_row(r["filename"], r["session_id"][:12] + "..." if r["session_id"] else "-", snippets)
+        console.print(table)
+
+    elif sub == "load":
+        if not sub_args:
+            console.print("[red]用法: /history load <文件名>[/red]")
+            return
+        messages = ctx.conversation_logger.load(sub_args)
+        if not messages:
+            console.print(f"[yellow]未找到文件或文件为空: {sub_args}[/yellow]")
+            return
+        for msg in messages:
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            if role == "user":
+                console.print(f"\n[bold cyan]User:[/bold cyan] {content}")
+            elif role in ("assistant", "model"):
+                console.print(f"\n[bold green]Assistant:[/bold green] {content}")
+            elif role == "tool":
+                tool_name = msg.get("tool_name", "unknown")
+                preview = content[:200] + "..." if len(content) > 200 else content
+                console.print(f"\n[dim]Tool ({tool_name}):[/dim] {preview}")
+
+    else:
+        # 默认列出最近的对话记录
+        logs = ctx.conversation_logger.list_logs()
+        if not logs:
+            console.print("[yellow]没有保存的对话记录。[/yellow]")
+            return
+        table = Table(title="对话记录", show_header=True, header_style="bold cyan")
+        table.add_column("#", style="dim", width=4)
+        table.add_column("文件名", style="green")
+        table.add_column("Session ID")
+        table.add_column("保存时间")
+        table.add_column("消息数", justify="right")
+        for idx, log in enumerate(logs, 1):
+            saved_at = log.get("saved_at", "")
+            if saved_at:
+                try:
+                    dt = datetime.fromisoformat(saved_at)
+                    saved_at = dt.strftime("%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    pass
+            sid = log.get("session_id", "")
+            table.add_row(
+                str(idx),
+                log["filename"],
+                sid[:12] + "..." if sid else "-",
+                saved_at,
+                str(log.get("message_count", 0)),
+            )
+        console.print(table)
+
+
 # ---------------------------------------------------------------------------
 # 命令注册表
 # ---------------------------------------------------------------------------
@@ -316,6 +396,7 @@ _register("memory", "查看持久记忆列表", cmd_memory)
 _register("project", "查看项目信息（rescan 重新扫描）", cmd_project)
 _register("skill", "Skill 管理（list/install/remove/catalog）", cmd_skill)
 _register("mcp", "MCP 服务管理（list/add/remove）", cmd_mcp)
+_register("history", "对话历史（search/load）", cmd_history)
 _register("exit", "退出 CLI", cmd_exit)
 
 
